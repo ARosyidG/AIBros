@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">AIBROS</string>
+    <string name="enter_url">Enter URL</string>
+    <string name="go">Go</string>
+    <string name="translate_page">Translate Page</string>
+    <string name="translate">Translate</string>
+</resources>
