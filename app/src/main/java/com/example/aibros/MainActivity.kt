@@ -53,16 +53,10 @@ class MainActivity : AppCompatActivity() {
         .build()
 
     // ------------------- Cache helpers -------------------
-    private fun getCacheKey(url: String, fromLang: String, toLang: String): String {
-        val input = "$url|$fromLang|$toLang"
-        val digest = MessageDigest.getInstance("SHA-1").digest(input.toByteArray())
-        return digest.joinToString("") { "%02x".format(it) } + ".cache"
-    }
-
     private fun getCacheFile(url: String, fromLang: String, toLang: String): File {
         val cacheDir = File(filesDir, "translations")
         if (!cacheDir.exists()) cacheDir.mkdirs()
-        return File(cacheDir, getCacheKey(url, fromLang, toLang))
+        return File(cacheDir, TranslationUtils.getCacheKey(url, fromLang, toLang))
     }
 
     private fun saveTranslationCache(url: String, fromLang: String, toLang: String, translatedList: List<String>) {
@@ -81,8 +75,7 @@ class MainActivity : AppCompatActivity() {
         try {
             ObjectInputStream(FileInputStream(file)).use { input ->
                 val cache = input.readObject() as TranslationCache
-                val age = System.currentTimeMillis() - cache.timestamp
-                if (age < 24 * 60 * 60 * 1000) {
+                if (TranslationUtils.isCacheFresh(cache)) {
                     return cache.translatedList
                 } else {
                     file.delete()
@@ -178,31 +171,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ------------------- API helpers -------------------
-    private fun parseGeminiResponse(raw: String): List<String> {
-        try {
-            val json = JSONObject(raw)
-            val text = json.getJSONArray("candidates")
-                .getJSONObject(0)
-                .getJSONObject("content")
-                .getJSONArray("parts")
-                .getJSONObject(0)
-                .getString("text")
-
-            return try {
-                JSONArray(text).let { array ->
-                    (0 until array.length()).map { array.getString(it) }
-                }
-            } catch (e: JSONException) {
-                val quoted = JSONObject.quote(text)
-                val cleaned = quoted.substring(1, quoted.length - 1)
-                val array = JSONArray(cleaned)
-                (0 until array.length()).map { array.getString(it) }
-            }
-        } catch (e: Exception) {
-            Log.e("API_PARSE", "Failed to parse", e)
-            return emptyList()
-        }
-    }
+    private fun parseGeminiResponse(raw: String): List<String> = TranslationUtils.parseGeminiResponse(raw)
 
     private fun translateChunk(
         chunk: List<String>,
@@ -404,10 +373,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnGo.setOnClickListener {
-            var url = urlInput.text.toString()
-            if (!url.startsWith("http")) {
-                url = "https://$url"
-            }
+            val url = TranslationUtils.normalizeUrl(urlInput.text.toString())
             webView.loadUrl(url)
         }
 
