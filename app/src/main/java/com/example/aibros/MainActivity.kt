@@ -96,13 +96,16 @@ class MainActivity : AppCompatActivity() {
         val js = """
         (function(translations) {
             function isExcluded(node) {
-                let el = node.parentElement;
+                var el = node.parentElement;
                 while (el) {
-                    let tag = el.tagName;
-                    if (tag === 'A' || tag === 'BUTTON') return true;
+                    var tag = el.tagName;
+                    if (tag === 'BUTTON') return true;
                     if (tag === 'INPUT') {
-                        let type = el.type;
+                        var type = el.type;
                         if (type === 'button' || type === 'submit' || type === 'reset') return true;
+                    }
+                    if (tag === 'A') {
+                        return node.nodeValue.trim().length <= 8;
                     }
                     el = el.parentElement;
                 }
@@ -142,13 +145,16 @@ class MainActivity : AppCompatActivity() {
         val js = """
         (function() {
             function isExcluded(node) {
-                let el = node.parentElement;
+                var el = node.parentElement;
                 while (el) {
-                    let tag = el.tagName;
-                    if (tag === 'A' || tag === 'BUTTON') return true;
+                    var tag = el.tagName;
+                    if (tag === 'BUTTON') return true;
                     if (tag === 'INPUT') {
-                        let type = el.type;
+                        var type = el.type;
                         if (type === 'button' || type === 'submit' || type === 'reset') return true;
+                    }
+                    if (tag === 'A') {
+                        return node.nodeValue.trim().length <= 8;
                     }
                     el = el.parentElement;
                 }
