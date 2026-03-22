@@ -373,8 +373,15 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnGo.setOnClickListener {
-            val url = TranslationUtils.normalizeUrl(urlInput.text.toString())
-            webView.loadUrl(url)
+            val input = urlInput.text.toString().trim()
+            val url = TranslationUtils.normalizeUrl(input)
+
+            if (android.util.Patterns.WEB_URL.matcher(url).matches()) {
+                webView.loadUrl(url)
+            } else {
+                val searchQuery = java.net.URLEncoder.encode(input, "UTF-8")
+                webView.loadUrl("https://www.google.com/search?q=$searchQuery")
+            }
         }
 
         btnClearCache.setOnClickListener {
