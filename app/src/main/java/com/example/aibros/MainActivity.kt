@@ -22,6 +22,7 @@ import androidx.appcompat.app.AlertDialog
 import android.widget.ProgressBar
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import java.io.File
 import java.io.FileOutputStream
 import java.io.FileInputStream
@@ -451,5 +452,16 @@ class MainActivity : AppCompatActivity() {
                 translateNext()
             }
         }
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (webView.canGoBack()) {
+                    webView.goBack()
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                    isEnabled = true
+                }
+            }
+        })
     }
 }
