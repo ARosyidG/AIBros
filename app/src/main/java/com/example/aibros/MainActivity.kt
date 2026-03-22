@@ -52,6 +52,7 @@ class MainActivity : AppCompatActivity() {
         .writeTimeout(120, TimeUnit.SECONDS)
         .build()
 
+    // ------------------- Cache helpers -------------------
     private fun getCacheKey(url: String, fromLang: String, toLang: String): String {
         val input = "$url|$fromLang|$toLang"
         val digest = MessageDigest.getInstance("SHA-1").digest(input.toByteArray())
@@ -93,10 +94,7 @@ class MainActivity : AppCompatActivity() {
         return null
     }
 
-    /**
-     * Replaces the text in the previously stored translation nodes with the translated list.
-     * Assumes that window.translationNodes exists and is an array of text nodes.
-     */
+    // ------------------- WebView interaction -------------------
     private fun replaceTextInWebView(translatedList: List<String>) {
         val jsonArray = JSONArray(translatedList).toString()
         val js = """
@@ -108,11 +106,10 @@ class MainActivity : AppCompatActivity() {
             for (var i = 0; i < translations.length; i++) {
                 window.translationNodes[i].nodeValue = translations[i];
             }
-            // Clear the stored nodes to free memory
             window.translationNodes = null;
             return translations.length;
         })($jsonArray);
-    """.trimIndent()
+        """.trimIndent()
         webView.evaluateJavascript(js) { result ->
             Log.d("REPLACE", "Replaced $result nodes")
             runOnUiThread {
@@ -121,16 +118,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Extracts text from the page, applying exclusions (buttons, short links, already‑target‑language text).
-     * Stores the text nodes that need translation in window.translationNodes and returns the texts as a JSON string.
-     * @param targetLang The language we are translating to (used for language detection).
-     */
     private fun getTextFromPage(targetLang: String, callback: (String) -> Unit) {
         val js = """
         (function(targetLang) {
             function isExcluded(node) {
-                // 1. Check ancestors for button/input/link
                 var el = node.parentElement;
                 while (el) {
                     var tag = el.tagName;
@@ -140,20 +131,14 @@ class MainActivity : AppCompatActivity() {
                         if (type === 'button' || type === 'submit' || type === 'reset') return true;
                     }
                     if (tag === 'A') {
-                        // Exclude anchor text if its length <= 10 characters
                         return node.nodeValue.trim().length <= 10;
                     }
                     el = el.parentElement;
                 }
-                
-                // 2. Language detection: if target language is English or Indonesian (Latin script),
-                //    we consider text that contains only ASCII characters as already in target language.
-                //    This is a simple heuristic; you can extend it for other languages.
                 if (targetLang === 'English' || targetLang === 'Indonesia') {
                     var text = node.nodeValue;
-                    // Allow letters, digits, spaces, punctuation, but no non-ASCII
                     if (/^[\x00-\x7F]*$/.test(text)) {
-                        return true; // Already in target language (Latin script)
+                        return true;
                     }
                 }
                 return false;
@@ -174,11 +159,10 @@ class MainActivity : AppCompatActivity() {
                     nodes.push(node);
                 }
             }
-            // Store the nodes globally for later replacement
             window.translationNodes = nodes;
             return JSON.stringify(texts);
         })('$targetLang');
-    """.trimIndent()
+        """.trimIndent()
 
         webView.evaluateJavascript(js) { result ->
             try {
@@ -193,26 +177,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun deleteCacheForCurrentPage() {
-        val currentUrl = webView.url ?: run {
-            Toast.makeText(this, "No page loaded", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val fromLang = spinnerFrom.selectedItem.toString()
-        val toLang = spinnerTo.selectedItem.toString()
-
-        val cacheFile = getCacheFile(currentUrl, fromLang, toLang)
-        if (cacheFile.exists()) {
-            if (cacheFile.delete()) {
-                Toast.makeText(this, "Cache deleted for this page", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(this, "Failed to delete cache", Toast.LENGTH_SHORT).show()
-            }
-        } else {
-            Toast.makeText(this, "No cache found for this page", Toast.LENGTH_SHORT).show()
-        }
-    }
-
+    // ------------------- API helpers -------------------
     private fun parseGeminiResponse(raw: String): List<String> {
         try {
             val json = JSONObject(raw)
@@ -278,7 +243,7 @@ class MainActivity : AppCompatActivity() {
             override fun onFailure(call: Call, e: IOException) {
                 Log.e("API", "Error: ${e.message}")
                 runOnUiThread {
-                    loadingDialog?.dismiss()
+                    dismissLoadingDialog()
                     btnTranslate.isEnabled = true
                     Toast.makeText(this@MainActivity, "Network error: ${e.message}", Toast.LENGTH_LONG).show()
                 }
@@ -300,6 +265,102 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
+    // ------------------- Translation orchestration -------------------
+    private fun showLoadingDialog() {
+        val progressBar = ProgressBar(this).apply {
+            isIndeterminate = true
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        loadingDialog = MaterialAlertDialogBuilder(this)
+            .setTitle("Translating")
+            .setMessage("Please wait...")
+            .setView(progressBar)
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun dismissLoadingDialog() {
+        loadingDialog?.dismiss()
+        loadingDialog = null
+    }
+
+    private fun startTranslation(fromLang: String, toLang: String, currentUrl: String) {
+        // Extract texts that need translation (this also sets window.translationNodes)
+        getTextFromPage(toLang) { textJson ->
+            if (textJson.isEmpty() || textJson == "[]") {
+                runOnUiThread {
+                    dismissLoadingDialog()
+                    btnTranslate.isEnabled = true
+                    Toast.makeText(this, "No text found on page.", Toast.LENGTH_SHORT).show()
+                }
+                return@getTextFromPage
+            }
+
+            val allTexts = try {
+                JSONArray(textJson).let { array ->
+                    (0 until array.length()).map { array.getString(it) }
+                }
+            } catch (e: JSONException) {
+                emptyList()
+            }
+
+            if (allTexts.isEmpty()) {
+                runOnUiThread {
+                    dismissLoadingDialog()
+                    btnTranslate.isEnabled = true
+                    Toast.makeText(this, "No text nodes need translation.", Toast.LENGTH_SHORT).show()
+                }
+                return@getTextFromPage
+            }
+
+            val chunkSize = 120
+            val chunks = allTexts.chunked(chunkSize)
+            val translatedChunks = mutableListOf<List<String>>()
+            var currentChunkIndex = 0
+
+            fun translateNext() {
+                if (currentChunkIndex >= chunks.size) {
+                    val combined = translatedChunks.flatten()
+                    runOnUiThread {
+                        dismissLoadingDialog()
+                        btnTranslate.isEnabled = true
+                        if (combined.isNotEmpty() && combined.size == allTexts.size) {
+                            saveTranslationCache(currentUrl, fromLang, toLang, combined)
+                            replaceTextInWebView(combined)
+                            Toast.makeText(this, "Translation completed!", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(this, "Translation failed for some chunks.", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    return
+                }
+
+                (loadingDialog?.findViewById<android.widget.TextView>(android.R.id.message))?.text =
+                    getString(R.string.translating_chunk, currentChunkIndex + 1, chunks.size)
+
+                val chunk = chunks[currentChunkIndex]
+                translateChunk(chunk, fromLang, toLang) { translatedList ->
+                    if (translatedList.isNotEmpty()) {
+                        translatedChunks.add(translatedList)
+                        currentChunkIndex++
+                        translateNext()
+                    } else {
+                        runOnUiThread {
+                            dismissLoadingDialog()
+                            btnTranslate.isEnabled = true
+                            Toast.makeText(this, "Translation failed for chunk ${currentChunkIndex + 1}", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
+            translateNext()
+        }
+    }
+
+    // ------------------- UI / Lifecycle -------------------
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -308,6 +369,7 @@ class MainActivity : AppCompatActivity() {
         urlInput = findViewById(R.id.urlInput)
         btnGo = findViewById(R.id.btnGo)
         btnTranslate = findViewById(R.id.btnTranslate)
+        btnClearCache = findViewById(R.id.btnClearCache)
 
         spinnerFrom = findViewById(R.id.spinnerFrom)
         spinnerTo = findViewById(R.id.spinnerTo)
@@ -328,22 +390,19 @@ class MainActivity : AppCompatActivity() {
         webView.settings.domStorageEnabled = true
         webView.settings.useWideViewPort = true
         webView.settings.loadWithOverviewMode = true
-        webView.settings.userAgentString = webView.settings.userAgentString
-        webView.webViewClient = object : WebViewClient() {
-            override fun onPageFinished(view: WebView?, url: String?) {
-                super.onPageFinished(view, url)
-            }
-        }
+        webView.webViewClient = WebViewClient()
 
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
         webView.loadUrl("https://ncode.syosetu.com/n6134fz/1/")
+
         urlInput.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEARCH) {
                 btnGo.performClick()
                 true
             } else false
         }
+
         btnGo.setOnClickListener {
             var url = urlInput.text.toString()
             if (!url.startsWith("http")) {
@@ -351,113 +410,58 @@ class MainActivity : AppCompatActivity() {
             }
             webView.loadUrl(url)
         }
-        btnClearCache = findViewById(R.id.btnClearCache)
+
         btnClearCache.setOnClickListener {
             deleteCacheForCurrentPage()
         }
+
         btnTranslate.setOnClickListener {
             btnTranslate.isEnabled = false
+            showLoadingDialog()
 
             val fromLang = spinnerFrom.selectedItem.toString()
             val toLang = spinnerTo.selectedItem.toString()
             val currentUrl = webView.url ?: ""
 
-            val progressBar = ProgressBar(this).apply {
-                isIndeterminate = true
-                layoutParams = android.widget.LinearLayout.LayoutParams(
-                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-            }
-            loadingDialog = MaterialAlertDialogBuilder(this)
-                .setTitle("Translating")
-                .setMessage("Please wait...")
-                .setView(progressBar)
-                .setCancelable(false)
-                .show()
-
+            // Try to load from cache
             val cached = loadTranslationCache(currentUrl, fromLang, toLang)
             if (cached != null) {
-                runOnUiThread {
-                    loadingDialog?.dismiss()
-                    btnTranslate.isEnabled = true
-                    replaceTextInWebView(cached)
-                    Toast.makeText(this, "Translation loaded from cache", Toast.LENGTH_SHORT).show()
+                // Re‑extract nodes to have a valid window.translationNodes
+                getTextFromPage(toLang) { textJson ->
+                    if (textJson.isEmpty() || textJson == "[]") {
+                        dismissLoadingDialog()
+                        btnTranslate.isEnabled = true
+                        Toast.makeText(this, "Page has no translatable text.", Toast.LENGTH_SHORT).show()
+                        return@getTextFromPage
+                    }
+
+                    val currentTexts = try {
+                        JSONArray(textJson).let { array ->
+                            (0 until array.length()).map { array.getString(it) }
+                        }
+                    } catch (e: JSONException) {
+                        emptyList()
+                    }
+
+                    if (currentTexts.size == cached.size) {
+                        // Cache matches current page structure
+                        replaceTextInWebView(cached)
+                        dismissLoadingDialog()
+                        btnTranslate.isEnabled = true
+                        Toast.makeText(this, "Translation loaded from cache", Toast.LENGTH_SHORT).show()
+                    } else {
+                        // Cache is outdated – delete it and translate fresh
+                        getCacheFile(currentUrl, fromLang, toLang).delete()
+                        startTranslation(fromLang, toLang, currentUrl)
+                    }
                 }
                 return@setOnClickListener
             }
 
-            // Extract texts that need translation (excluding already‑target‑language text)
-            getTextFromPage(toLang) { textJson ->
-                if (textJson.isEmpty() || textJson == "[]") {
-                    runOnUiThread {
-                        loadingDialog?.dismiss()
-                        btnTranslate.isEnabled = true
-                        Toast.makeText(this, "No text found on page.", Toast.LENGTH_SHORT).show()
-                    }
-                    return@getTextFromPage
-                }
-
-                val allTexts = try {
-                    JSONArray(textJson).let { array ->
-                        (0 until array.length()).map { array.getString(it) }
-                    }
-                } catch (e: JSONException) {
-                    emptyList()
-                }
-
-                if (allTexts.isEmpty()) {
-                    runOnUiThread {
-                        loadingDialog?.dismiss()
-                        btnTranslate.isEnabled = true
-                        Toast.makeText(this, "No text nodes need translation.", Toast.LENGTH_SHORT).show()
-                    }
-                    return@getTextFromPage
-                }
-
-                val chunkSize = 120
-                val chunks = allTexts.chunked(chunkSize)
-                val translatedChunks = mutableListOf<List<String>>()
-                var currentChunkIndex = 0
-
-                fun translateNext() {
-                    if (currentChunkIndex >= chunks.size) {
-                        val combined = translatedChunks.flatten()
-                        runOnUiThread {
-                            loadingDialog?.dismiss()
-                            btnTranslate.isEnabled = true
-                            if (combined.isNotEmpty() && combined.size == allTexts.size) {
-                                saveTranslationCache(currentUrl, fromLang, toLang, combined)
-                                replaceTextInWebView(combined)
-                                Toast.makeText(this, "Translation completed!", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(this, "Translation failed for some chunks.", Toast.LENGTH_LONG).show()
-                            }
-                        }
-                        return
-                    }
-
-                    (loadingDialog?.findViewById<android.widget.TextView>(android.R.id.message))?.text =
-                        getString(R.string.translating_chunk, currentChunkIndex + 1, chunks.size)
-
-                    val chunk = chunks[currentChunkIndex]
-                    translateChunk(chunk, fromLang, toLang) { translatedList ->
-                        if (translatedList.isNotEmpty()) {
-                            translatedChunks.add(translatedList)
-                            currentChunkIndex++
-                            translateNext()
-                        } else {
-                            runOnUiThread {
-                                loadingDialog?.dismiss()
-                                btnTranslate.isEnabled = true
-                                Toast.makeText(this, "Translation failed for chunk ${currentChunkIndex + 1}", Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    }
-                }
-                translateNext()
-            }
+            // No cache – start fresh translation
+            startTranslation(fromLang, toLang, currentUrl)
         }
+
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (webView.canGoBack()) {
@@ -469,5 +473,25 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
+    }
+
+    private fun deleteCacheForCurrentPage() {
+        val currentUrl = webView.url ?: run {
+            Toast.makeText(this, "No page loaded", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val fromLang = spinnerFrom.selectedItem.toString()
+        val toLang = spinnerTo.selectedItem.toString()
+
+        val cacheFile = getCacheFile(currentUrl, fromLang, toLang)
+        if (cacheFile.exists()) {
+            if (cacheFile.delete()) {
+                Toast.makeText(this, "Cache deleted for this page", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "Failed to delete cache", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(this, "No cache found for this page", Toast.LENGTH_SHORT).show()
+        }
     }
 }
