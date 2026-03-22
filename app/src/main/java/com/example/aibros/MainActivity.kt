@@ -14,6 +14,7 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import android.util.Log
+import android.view.inputmethod.EditorInfo
 import org.json.JSONObject
 import org.json.JSONArray
 import java.io.IOException
@@ -337,7 +338,12 @@ class MainActivity : AppCompatActivity() {
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
         webView.loadUrl("https://ncode.syosetu.com/n6134fz/1/")
-
+        urlInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                btnGo.performClick()
+                true
+            } else false
+        }
         btnGo.setOnClickListener {
             var url = urlInput.text.toString()
             if (!url.startsWith("http")) {

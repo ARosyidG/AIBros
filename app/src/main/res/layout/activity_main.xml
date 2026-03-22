@@ -24,7 +24,9 @@
                 android:layout_height="wrap_content"
                 android:hint="@string/enter_url"
                 android:importantForAutofill="no"
-                android:inputType="textUri"/>
+                android:inputType="textUri"
+                android:imeOptions="actionSearch"
+                android:maxLines="1" />
 
             <com.google.android.material.imageview.ShapeableImageView
                 android:id="@+id/btnGo"
