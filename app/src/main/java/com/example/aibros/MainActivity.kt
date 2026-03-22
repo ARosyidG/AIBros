@@ -29,8 +29,6 @@ import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.io.Serializable
 import java.security.MessageDigest
-import java.util.Date
-import androidx.core.net.toUri
 import org.json.JSONException
 
 data class TranslationCache(val translatedList: List<String>, val timestamp: Long) : Serializable
@@ -47,9 +45,9 @@ class MainActivity : AppCompatActivity() {
     lateinit var btnClearCache: ShapeableImageView
 
     val client = OkHttpClient.Builder()
-        .connectTimeout(60, TimeUnit.SECONDS)   // Time to establish connection
-        .readTimeout(60, TimeUnit.SECONDS)      // Time to wait for the response
-        .writeTimeout(60, TimeUnit.SECONDS)     // Time to send the request body
+        .connectTimeout(120, TimeUnit.SECONDS)   // Time to establish connection
+        .readTimeout(120, TimeUnit.SECONDS)      // Time to wait for the response
+        .writeTimeout(120, TimeUnit.SECONDS)     // Time to send the request body
         .build()
     private fun getCacheKey(url: String, fromLang: String, toLang: String): String {
         val input = "$url|$fromLang|$toLang"
@@ -185,9 +183,19 @@ class MainActivity : AppCompatActivity() {
                 .getJSONArray("parts")
                 .getJSONObject(0)
                 .getString("text")
-            // Now text is a JSON array string
-            val jsonArray = JSONArray(text)
-            return (0 until jsonArray.length()).map { jsonArray.getString(it) }
+
+            // First attempt: parse directly
+            return try {
+                JSONArray(text).let { array ->
+                    (0 until array.length()).map { array.getString(it) }
+                }
+            } catch (e: JSONException) {
+                // If direct parse fails, escape the string using JSONObject.quote
+                val quoted = JSONObject.quote(text)        // adds outer quotes and escapes everything
+                val cleaned = quoted.substring(1, quoted.length - 1)  // remove the outer quotes
+                val array = JSONArray(cleaned)
+                (0 until array.length()).map { array.getString(it) }
+            }
         } catch (e: Exception) {
             Log.e("API_PARSE", "Failed to parse", e)
             return emptyList()
@@ -255,6 +263,20 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
+    }
+    private fun escapeJsonString(s: String): String {
+        val sb = StringBuilder()
+        for (c in s) {
+            when (c) {
+                '\\' -> sb.append("\\\\")
+                '"' -> sb.append("\\\"")
+                '\n' -> sb.append("\\n")
+                '\r' -> sb.append("\\r")
+                '\t' -> sb.append("\\t")
+                else -> sb.append(c)
+            }
+        }
+        return sb.toString()
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -401,7 +423,7 @@ class MainActivity : AppCompatActivity() {
 
                     // Update loading dialog message to show progress
                     (loadingDialog?.findViewById<android.widget.TextView>(android.R.id.message))?.text =
-                        "Translating chunk ${currentChunkIndex + 1}/${chunks.size}..."
+                        getString(R.string.translating_chunk, currentChunkIndex + 1, chunks.size)
 
                     val chunk = chunks[currentChunkIndex]
                     translateChunk(chunk, fromLang, toLang) { translatedList ->
