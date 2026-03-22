@@ -45,10 +45,11 @@ class MainActivity : AppCompatActivity() {
     lateinit var btnClearCache: ShapeableImageView
 
     val client = OkHttpClient.Builder()
-        .connectTimeout(120, TimeUnit.SECONDS)   // Time to establish connection
-        .readTimeout(120, TimeUnit.SECONDS)      // Time to wait for the response
-        .writeTimeout(120, TimeUnit.SECONDS)     // Time to send the request body
+        .connectTimeout(120, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
         .build()
+
     private fun getCacheKey(url: String, fromLang: String, toLang: String): String {
         val input = "$url|$fromLang|$toLang"
         val digest = MessageDigest.getInstance("SHA-1").digest(input.toByteArray())
@@ -60,6 +61,7 @@ class MainActivity : AppCompatActivity() {
         if (!cacheDir.exists()) cacheDir.mkdirs()
         return File(cacheDir, getCacheKey(url, fromLang, toLang))
     }
+
     private fun saveTranslationCache(url: String, fromLang: String, toLang: String, translatedList: List<String>) {
         try {
             val cache = TranslationCache(translatedList, System.currentTimeMillis())
@@ -69,6 +71,7 @@ class MainActivity : AppCompatActivity() {
             Log.e("CACHE", "Failed to save cache", e)
         }
     }
+
     private fun loadTranslationCache(url: String, fromLang: String, toLang: String): List<String>? {
         val file = getCacheFile(url, fromLang, toLang)
         if (!file.exists()) return null
@@ -76,10 +79,10 @@ class MainActivity : AppCompatActivity() {
             ObjectInputStream(FileInputStream(file)).use { input ->
                 val cache = input.readObject() as TranslationCache
                 val age = System.currentTimeMillis() - cache.timestamp
-                if (age < 24 * 60 * 60 * 1000) { // 24 hours
+                if (age < 24 * 60 * 60 * 1000) {
                     return cache.translatedList
                 } else {
-                    file.delete() // expired
+                    file.delete()
                 }
             }
         } catch (e: Exception) {
@@ -87,10 +90,25 @@ class MainActivity : AppCompatActivity() {
         }
         return null
     }
+
     private fun replaceTextInWebView(translatedList: List<String>) {
         val jsonArray = JSONArray(translatedList).toString()
         val js = """
         (function(translations) {
+            function isExcluded(node) {
+                let el = node.parentElement;
+                while (el) {
+                    let tag = el.tagName;
+                    if (tag === 'A' || tag === 'BUTTON') return true;
+                    if (tag === 'INPUT') {
+                        let type = el.type;
+                        if (type === 'button' || type === 'submit' || type === 'reset') return true;
+                    }
+                    el = el.parentElement;
+                }
+                return false;
+            }
+            
             var walker = document.createTreeWalker(
                 document.body,
                 NodeFilter.SHOW_TEXT,
@@ -100,7 +118,7 @@ class MainActivity : AppCompatActivity() {
             var nodes = [];
             var node;
             while (node = walker.nextNode()) {
-                if (node.nodeValue.trim().length > 0) {
+                if (node.nodeValue.trim().length > 0 && !isExcluded(node)) {
                     nodes.push(node);
                 }
             }
@@ -123,6 +141,20 @@ class MainActivity : AppCompatActivity() {
     private fun getTextFromPage(callback: (String) -> Unit) {
         val js = """
         (function() {
+            function isExcluded(node) {
+                let el = node.parentElement;
+                while (el) {
+                    let tag = el.tagName;
+                    if (tag === 'A' || tag === 'BUTTON') return true;
+                    if (tag === 'INPUT') {
+                        let type = el.type;
+                        if (type === 'button' || type === 'submit' || type === 'reset') return true;
+                    }
+                    el = el.parentElement;
+                }
+                return false;
+            }
+            
             let walker = document.createTreeWalker(
                 document.body,
                 NodeFilter.SHOW_TEXT,
@@ -132,7 +164,7 @@ class MainActivity : AppCompatActivity() {
             let texts = [];
             let node;
             while (node = walker.nextNode()) {
-                if (node.nodeValue.trim().length > 0) {
+                if (node.nodeValue.trim().length > 0 && !isExcluded(node)) {
                     texts.push(node.nodeValue);
                 }
             }
@@ -141,13 +173,10 @@ class MainActivity : AppCompatActivity() {
     """.trimIndent()
 
         webView.evaluateJavascript(js) { result ->
-            // result is a JSON string: e.g. "[\"a\",\"b\"]"
-            // We need to parse it to get the actual array string
             try {
-                // Remove the outer quotes and unescape inner quotes
                 val arrayString = result.removeSurrounding("\"")
                     .replace("\\\"", "\"")
-                    .replace("\\\\", "\\")  // handle escaped backslashes if any
+                    .replace("\\\\", "\\")
                 callback(arrayString)
             } catch (e: Exception) {
                 Log.e("getTextFromPage", "Failed to parse result: $result", e)
@@ -155,6 +184,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
     private fun deleteCacheForCurrentPage() {
         val currentUrl = webView.url ?: run {
             Toast.makeText(this, "No page loaded", Toast.LENGTH_SHORT).show()
@@ -174,6 +204,7 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "No cache found for this page", Toast.LENGTH_SHORT).show()
         }
     }
+
     private fun parseGeminiResponse(raw: String): List<String> {
         try {
             val json = JSONObject(raw)
@@ -184,15 +215,13 @@ class MainActivity : AppCompatActivity() {
                 .getJSONObject(0)
                 .getString("text")
 
-            // First attempt: parse directly
             return try {
                 JSONArray(text).let { array ->
                     (0 until array.length()).map { array.getString(it) }
                 }
             } catch (e: JSONException) {
-                // If direct parse fails, escape the string using JSONObject.quote
-                val quoted = JSONObject.quote(text)        // adds outer quotes and escapes everything
-                val cleaned = quoted.substring(1, quoted.length - 1)  // remove the outer quotes
+                val quoted = JSONObject.quote(text)
+                val cleaned = quoted.substring(1, quoted.length - 1)
                 val array = JSONArray(cleaned)
                 (0 until array.length()).map { array.getString(it) }
             }
@@ -201,20 +230,19 @@ class MainActivity : AppCompatActivity() {
             return emptyList()
         }
     }
+
     private fun translateChunk(
         chunk: List<String>,
         fromLang: String,
         toLang: String,
         callback: (List<String>) -> Unit
     ) {
-        //  check if API key is set
         if (BuildConfig.GEMINI_API_KEY.isEmpty()) {
             Toast.makeText(this, "GEMINI_API_KEY is not set. Please add it to local.properties.", Toast.LENGTH_LONG).show()
             return
         }
         val jsonArray = JSONArray(chunk).toString()
 
-        // Build prompt similar to before
         val prompt = """
             Translate this JSON array from $fromLang to $toLang.
             Keep same order.
@@ -234,12 +262,11 @@ class MainActivity : AppCompatActivity() {
         val request = Request.Builder()
             .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent")
             .addHeader("Content-Type", "application/json")
-            .addHeader("X-goog-api-key", BuildConfig.GEMINI_API_KEY) // <- key must go here
+            .addHeader("X-goog-api-key", BuildConfig.GEMINI_API_KEY)
             .post(bodyJson.toRequestBody("application/json".toMediaType()))
             .build()
 
         client.newCall(request).enqueue(object : Callback {
-
             override fun onFailure(call: Call, e: IOException) {
                 Log.e("API", "Error: ${e.message}")
                 runOnUiThread {
@@ -264,6 +291,7 @@ class MainActivity : AppCompatActivity() {
             }
         })
     }
+
     private fun escapeJsonString(s: String): String {
         val sb = StringBuilder()
         for (c in s) {
@@ -278,6 +306,7 @@ class MainActivity : AppCompatActivity() {
         }
         return sb.toString()
     }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -286,7 +315,6 @@ class MainActivity : AppCompatActivity() {
         urlInput = findViewById(R.id.urlInput)
         btnGo = findViewById(R.id.btnGo)
         btnTranslate = findViewById(R.id.btnTranslate)
-
 
         spinnerFrom = findViewById(R.id.spinnerFrom)
         spinnerTo = findViewById(R.id.spinnerTo)
@@ -311,22 +339,18 @@ class MainActivity : AppCompatActivity() {
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                // page ready
             }
         }
 
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
-        // Load default page
         webView.loadUrl("https://ncode.syosetu.com/n6134fz/1/")
 
         btnGo.setOnClickListener {
             var url = urlInput.text.toString()
-
             if (!url.startsWith("http")) {
                 url = "https://$url"
             }
-
             webView.loadUrl(url)
         }
         btnClearCache = findViewById(R.id.btnClearCache)
@@ -340,7 +364,6 @@ class MainActivity : AppCompatActivity() {
             val toLang = spinnerTo.selectedItem.toString()
             val currentUrl = webView.url ?: ""
 
-            // Show loading dialog
             val progressBar = ProgressBar(this).apply {
                 isIndeterminate = true
                 layoutParams = android.widget.LinearLayout.LayoutParams(
@@ -355,7 +378,6 @@ class MainActivity : AppCompatActivity() {
                 .setCancelable(false)
                 .show()
 
-            // Check cache first
             val cached = loadTranslationCache(currentUrl, fromLang, toLang)
             if (cached != null) {
                 runOnUiThread {
@@ -367,7 +389,6 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
-            // No cache: extract text
             getTextFromPage { textJson ->
                 if (textJson.isEmpty() || textJson == "[]") {
                     runOnUiThread {
@@ -378,7 +399,6 @@ class MainActivity : AppCompatActivity() {
                     return@getTextFromPage
                 }
 
-                // Parse the JSON array
                 val allTexts = try {
                     JSONArray(textJson).let { array ->
                         (0 until array.length()).map { array.getString(it) }
@@ -396,16 +416,13 @@ class MainActivity : AppCompatActivity() {
                     return@getTextFromPage
                 }
 
-                // Split into chunks of size 120
                 val chunkSize = 120
                 val chunks = allTexts.chunked(chunkSize)
                 val translatedChunks = mutableListOf<List<String>>()
                 var currentChunkIndex = 0
 
-                // Function to translate the next chunk
                 fun translateNext() {
                     if (currentChunkIndex >= chunks.size) {
-                        // All chunks done, combine results
                         val combined = translatedChunks.flatten()
                         runOnUiThread {
                             loadingDialog?.dismiss()
@@ -421,7 +438,6 @@ class MainActivity : AppCompatActivity() {
                         return
                     }
 
-                    // Update loading dialog message to show progress
                     (loadingDialog?.findViewById<android.widget.TextView>(android.R.id.message))?.text =
                         getString(R.string.translating_chunk, currentChunkIndex + 1, chunks.size)
 
@@ -430,9 +446,8 @@ class MainActivity : AppCompatActivity() {
                         if (translatedList.isNotEmpty()) {
                             translatedChunks.add(translatedList)
                             currentChunkIndex++
-                            translateNext() // proceed to next chunk
+                            translateNext()
                         } else {
-                            // Translation failed for this chunk
                             runOnUiThread {
                                 loadingDialog?.dismiss()
                                 btnTranslate.isEnabled = true
@@ -441,7 +456,6 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
-                // Start translating the first chunk
                 translateNext()
             }
         }
