@@ -91,46 +91,24 @@ class MainActivity : AppCompatActivity() {
         return null
     }
 
+    /**
+     * Replaces the text in the previously stored translation nodes with the translated list.
+     * Assumes that window.translationNodes exists and is an array of text nodes.
+     */
     private fun replaceTextInWebView(translatedList: List<String>) {
         val jsonArray = JSONArray(translatedList).toString()
         val js = """
         (function(translations) {
-            function isExcluded(node) {
-                var el = node.parentElement;
-                while (el) {
-                    var tag = el.tagName;
-                    if (tag === 'BUTTON') return true;
-                    if (tag === 'INPUT') {
-                        var type = el.type;
-                        if (type === 'button' || type === 'submit' || type === 'reset') return true;
-                    }
-                    if (tag === 'A') {
-                        return node.nodeValue.trim().length <= 8;
-                    }
-                    el = el.parentElement;
-                }
-                return false;
+            if (!window.translationNodes || window.translationNodes.length !== translations.length) {
+                console.error('Mismatch: translation nodes count = ' + (window.translationNodes ? window.translationNodes.length : 'undefined') + ', translations length = ' + translations.length);
+                return -1;
             }
-            
-            var walker = document.createTreeWalker(
-                document.body,
-                NodeFilter.SHOW_TEXT,
-                null,
-                false
-            );
-            var nodes = [];
-            var node;
-            while (node = walker.nextNode()) {
-                if (node.nodeValue.trim().length > 0 && !isExcluded(node)) {
-                    nodes.push(node);
-                }
+            for (var i = 0; i < translations.length; i++) {
+                window.translationNodes[i].nodeValue = translations[i];
             }
-            var replacedCount = 0;
-            for (var i = 0; i < nodes.length && i < translations.length; i++) {
-                nodes[i].nodeValue = translations[i];
-                replacedCount++;
-            }
-            return replacedCount;
+            // Clear the stored nodes to free memory
+            window.translationNodes = null;
+            return translations.length;
         })($jsonArray);
     """.trimIndent()
         webView.evaluateJavascript(js) { result ->
@@ -141,10 +119,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun getTextFromPage(callback: (String) -> Unit) {
+    /**
+     * Extracts text from the page, applying exclusions (buttons, short links, already‑target‑language text).
+     * Stores the text nodes that need translation in window.translationNodes and returns the texts as a JSON string.
+     * @param targetLang The language we are translating to (used for language detection).
+     */
+    private fun getTextFromPage(targetLang: String, callback: (String) -> Unit) {
         val js = """
-        (function() {
+        (function(targetLang) {
             function isExcluded(node) {
+                // 1. Check ancestors for button/input/link
                 var el = node.parentElement;
                 while (el) {
                     var tag = el.tagName;
@@ -154,28 +138,44 @@ class MainActivity : AppCompatActivity() {
                         if (type === 'button' || type === 'submit' || type === 'reset') return true;
                     }
                     if (tag === 'A') {
-                        return node.nodeValue.trim().length <= 8;
+                        // Exclude anchor text if its length <= 10 characters
+                        return node.nodeValue.trim().length <= 10;
                     }
                     el = el.parentElement;
+                }
+                
+                // 2. Language detection: if target language is English or Indonesian (Latin script),
+                //    we consider text that contains only ASCII characters as already in target language.
+                //    This is a simple heuristic; you can extend it for other languages.
+                if (targetLang === 'English' || targetLang === 'Indonesia') {
+                    var text = node.nodeValue;
+                    // Allow letters, digits, spaces, punctuation, but no non-ASCII
+                    if (/^[\x00-\x7F]*$/.test(text)) {
+                        return true; // Already in target language (Latin script)
+                    }
                 }
                 return false;
             }
             
-            let walker = document.createTreeWalker(
+            var walker = document.createTreeWalker(
                 document.body,
                 NodeFilter.SHOW_TEXT,
                 null,
                 false
             );
-            let texts = [];
-            let node;
+            var texts = [];
+            var nodes = [];
+            var node;
             while (node = walker.nextNode()) {
                 if (node.nodeValue.trim().length > 0 && !isExcluded(node)) {
                     texts.push(node.nodeValue);
+                    nodes.push(node);
                 }
             }
+            // Store the nodes globally for later replacement
+            window.translationNodes = nodes;
             return JSON.stringify(texts);
-        })();
+        })('$targetLang');
     """.trimIndent()
 
         webView.evaluateJavascript(js) { result ->
@@ -251,7 +251,7 @@ class MainActivity : AppCompatActivity() {
 
         val prompt = """
             Translate this JSON array from $fromLang to $toLang.
-            Keep same order.
+            Keep the same order.
             Return ONLY JSON array.
             $jsonArray
         """.trimIndent()
@@ -296,21 +296,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
-    }
-
-    private fun escapeJsonString(s: String): String {
-        val sb = StringBuilder()
-        for (c in s) {
-            when (c) {
-                '\\' -> sb.append("\\\\")
-                '"' -> sb.append("\\\"")
-                '\n' -> sb.append("\\n")
-                '\r' -> sb.append("\\r")
-                '\t' -> sb.append("\\t")
-                else -> sb.append(c)
-            }
-        }
-        return sb.toString()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -395,7 +380,8 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
-            getTextFromPage { textJson ->
+            // Extract texts that need translation (excluding already‑target‑language text)
+            getTextFromPage(toLang) { textJson ->
                 if (textJson.isEmpty() || textJson == "[]") {
                     runOnUiThread {
                         loadingDialog?.dismiss()
@@ -417,7 +403,7 @@ class MainActivity : AppCompatActivity() {
                     runOnUiThread {
                         loadingDialog?.dismiss()
                         btnTranslate.isEnabled = true
-                        Toast.makeText(this, "No text nodes found.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "No text nodes need translation.", Toast.LENGTH_SHORT).show()
                     }
                     return@getTextFromPage
                 }
