@@ -193,12 +193,25 @@ class MainActivity : AppCompatActivity() {
             return emptyList()
         }
     }
-    fun translateWithGemini(textJson: String, fromLang: String, toLang: String, callback: (List<String>) -> Unit) {
+    private fun translateChunk(
+        chunk: List<String>,
+        fromLang: String,
+        toLang: String,
+        callback: (List<String>) -> Unit
+    ) {
+        //  check if API key is set
+        if (BuildConfig.GEMINI_API_KEY.isEmpty()) {
+            Toast.makeText(this, "GEMINI_API_KEY is not set. Please add it to local.properties.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val jsonArray = JSONArray(chunk).toString()
+
+        // Build prompt similar to before
         val prompt = """
             Translate this JSON array from $fromLang to $toLang.
             Keep same order.
             Return ONLY JSON array.
-            $textJson
+            $jsonArray
         """.trimIndent()
 
         val bodyJson = JSONObject().apply {
@@ -320,7 +333,7 @@ class MainActivity : AppCompatActivity() {
                 .setCancelable(false)
                 .show()
 
-            // Check cache
+            // Check cache first
             val cached = loadTranslationCache(currentUrl, fromLang, toLang)
             if (cached != null) {
                 runOnUiThread {
@@ -332,7 +345,7 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
-            // No cache: extract and translate
+            // No cache: extract text
             getTextFromPage { textJson ->
                 if (textJson.isEmpty() || textJson == "[]") {
                     runOnUiThread {
@@ -343,19 +356,71 @@ class MainActivity : AppCompatActivity() {
                     return@getTextFromPage
                 }
 
-                translateWithGemini(textJson, fromLang, toLang) { translatedList ->
+                // Parse the JSON array
+                val allTexts = try {
+                    JSONArray(textJson).let { array ->
+                        (0 until array.length()).map { array.getString(it) }
+                    }
+                } catch (e: JSONException) {
+                    emptyList()
+                }
+
+                if (allTexts.isEmpty()) {
                     runOnUiThread {
                         loadingDialog?.dismiss()
                         btnTranslate.isEnabled = true
+                        Toast.makeText(this, "No text nodes found.", Toast.LENGTH_SHORT).show()
+                    }
+                    return@getTextFromPage
+                }
+
+                // Split into chunks of size 120
+                val chunkSize = 120
+                val chunks = allTexts.chunked(chunkSize)
+                val translatedChunks = mutableListOf<List<String>>()
+                var currentChunkIndex = 0
+
+                // Function to translate the next chunk
+                fun translateNext() {
+                    if (currentChunkIndex >= chunks.size) {
+                        // All chunks done, combine results
+                        val combined = translatedChunks.flatten()
+                        runOnUiThread {
+                            loadingDialog?.dismiss()
+                            btnTranslate.isEnabled = true
+                            if (combined.isNotEmpty() && combined.size == allTexts.size) {
+                                saveTranslationCache(currentUrl, fromLang, toLang, combined)
+                                replaceTextInWebView(combined)
+                                Toast.makeText(this, "Translation completed!", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(this, "Translation failed for some chunks.", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                        return
+                    }
+
+                    // Update loading dialog message to show progress
+                    (loadingDialog?.findViewById<android.widget.TextView>(android.R.id.message))?.text =
+                        "Translating chunk ${currentChunkIndex + 1}/${chunks.size}..."
+
+                    val chunk = chunks[currentChunkIndex]
+                    translateChunk(chunk, fromLang, toLang) { translatedList ->
                         if (translatedList.isNotEmpty()) {
-                            saveTranslationCache(currentUrl, fromLang, toLang, translatedList)
-                            replaceTextInWebView(translatedList)
-                            Toast.makeText(this, "Translation completed!", Toast.LENGTH_SHORT).show()
+                            translatedChunks.add(translatedList)
+                            currentChunkIndex++
+                            translateNext() // proceed to next chunk
                         } else {
-                            Toast.makeText(this, "Translation failed. Check logs.", Toast.LENGTH_LONG).show()
+                            // Translation failed for this chunk
+                            runOnUiThread {
+                                loadingDialog?.dismiss()
+                                btnTranslate.isEnabled = true
+                                Toast.makeText(this, "Translation failed for chunk ${currentChunkIndex + 1}", Toast.LENGTH_LONG).show()
+                            }
                         }
                     }
                 }
+                // Start translating the first chunk
+                translateNext()
             }
         }
     }
