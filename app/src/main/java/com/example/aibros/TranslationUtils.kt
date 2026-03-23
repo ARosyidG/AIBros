@@ -10,10 +10,12 @@ object TranslationUtils {
     private const val CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000L
 
     /**
-     * Computes a SHA-1-based filename for the translation cache.
+     * Computes SHA-1-based filename for the translation cache.
      */
     fun getCacheKey(url: String, fromLang: String, toLang: String): String {
-        val input = "$url|$fromLang|$toLang"
+        // Remove fragment (anything after '#') because it doesn't change the content
+        val cleanUrl = url.split('#')[0]
+        val input = "$cleanUrl|$fromLang|$toLang"
         val digest = MessageDigest.getInstance("SHA-1").digest(input.toByteArray())
         return digest.joinToString("") { "%02x".format(it) } + ".cache"
     }

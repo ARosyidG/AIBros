@@ -54,6 +54,13 @@ class TranslationUtilsTest {
     }
 
     @Test
+    fun getCacheKey_stripsFragmentFromUrl() {
+        val keyWithFragment = TranslationUtils.getCacheKey("https://example.com#section", "Japanese", "English")
+        val keyWithoutFragment = TranslationUtils.getCacheKey("https://example.com", "Japanese", "English")
+        assertEquals("Fragment should be ignored for cache key", keyWithFragment, keyWithoutFragment)
+    }
+
+    @Test
     fun getCacheKey_emptyInputs_doesNotThrow() {
         // Should not throw; result should still be a valid 46-char string
         val key = TranslationUtils.getCacheKey("", "", "")
@@ -112,21 +119,21 @@ class TranslationUtilsTest {
 
     @Test
     fun isCacheFresh_returnsTrueForJustCreatedCache() {
-        val cache = TranslationCache(listOf("hello"), System.currentTimeMillis())
+        val cache = TranslationCache(emptyMap(), System.currentTimeMillis())
         assertTrue("Cache created right now should be fresh", TranslationUtils.isCacheFresh(cache))
     }
 
     @Test
     fun isCacheFresh_returnsFalseForOldCache() {
         val twentyFiveHoursAgo = System.currentTimeMillis() - 25 * 60 * 60 * 1000L
-        val cache = TranslationCache(listOf("hello"), twentyFiveHoursAgo)
+        val cache = TranslationCache(emptyMap(), twentyFiveHoursAgo)
         assertFalse("Cache older than 24 h should not be fresh", TranslationUtils.isCacheFresh(cache))
     }
 
     @Test
     fun isCacheFresh_returnsFalseForExactlyExpiredCache() {
         val exactlyOneDayAgo = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
-        val cache = TranslationCache(listOf("hello"), exactlyOneDayAgo)
+        val cache = TranslationCache(emptyMap(), exactlyOneDayAgo)
         // age == maxAgeMs, so condition is NOT strictly less-than → should be stale
         assertFalse("Cache at exactly 24 h old should not be fresh", TranslationUtils.isCacheFresh(cache))
     }
@@ -134,7 +141,7 @@ class TranslationUtilsTest {
     @Test
     fun isCacheFresh_honorCustomMaxAge() {
         val fiveMinutesAgo = System.currentTimeMillis() - 5 * 60 * 1000L
-        val cache = TranslationCache(listOf("hello"), fiveMinutesAgo)
+        val cache = TranslationCache(emptyMap(), fiveMinutesAgo)
         // Custom max age of 10 minutes → should be fresh
         assertTrue(TranslationUtils.isCacheFresh(cache, maxAgeMs = 10 * 60 * 1000L))
         // Custom max age of 1 minute → should be stale
